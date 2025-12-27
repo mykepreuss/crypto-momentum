@@ -234,6 +234,8 @@ Rolling 24h budget:
 - max_exit_alerts_24h = 5
 - max_total_alerts_24h = 10
 
+Budgets apply to alert events created by the signal engine; notification delivery is best-effort with brief retries and does not change eligibility.
+
 Cooldowns:
 - GLOBAL_ENTRY_COOLDOWN_MIN = 10
 - SYMBOL_ENTRY_COOLDOWN_MIN = 90

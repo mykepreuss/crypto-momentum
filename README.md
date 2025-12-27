@@ -62,3 +62,7 @@ pytest -q
 
 ## Environment
 See `.env.example` for defaults.
+
+## Deployment (always-on)
+This service runs background jobs on a 1-minute cadence, so deploy it as an always-on container/VM.
+See `docs/DEPLOYMENT.md`.

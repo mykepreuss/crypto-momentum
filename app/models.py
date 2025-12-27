@@ -85,6 +85,8 @@ class SignalState(Base):
     last_exit_alert_ts: Mapped[Optional[int]] = mapped_column(sa.BigInteger, nullable=True)
     peak_price_since_entry: Mapped[Optional[sa.Numeric]] = mapped_column(sa.Numeric, nullable=True)
     peak_ts_since_entry: Mapped[Optional[int]] = mapped_column(sa.BigInteger, nullable=True)
+    peak_high_since_entry: Mapped[Optional[sa.Numeric]] = mapped_column(sa.Numeric, nullable=True)
+    peak_high_ts_since_entry: Mapped[Optional[int]] = mapped_column(sa.BigInteger, nullable=True)
 
 
 class Alert(Base):
@@ -103,6 +105,9 @@ class Alert(Base):
     message: Mapped[str] = mapped_column(sa.Text, nullable=False)
     delivered: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
     delivery_channel: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
+    delivery_attempts: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=0)
+    last_delivery_attempt_ts: Mapped[Optional[int]] = mapped_column(sa.BigInteger, nullable=True)
+    delivery_error: Mapped[Optional[str]] = mapped_column(sa.Text, nullable=True)
 
 
 class AlertEvaluation(Base):

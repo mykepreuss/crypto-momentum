@@ -16,6 +16,7 @@ from app.config import Settings, get_settings
 from app.config_store import apply_overrides, load_settings_overrides, save_settings_overrides
 from app.db import create_engine, create_sessionmaker
 from app.exchange_client import CryptoComExchangeClient
+from app.jobs.alert_delivery import run_alert_delivery_service
 from app.jobs.candle_ingestion import run_candle_ingestion_service
 from app.jobs.evaluation import run_evaluation_service
 from app.models import Alert, AlertEvaluation, UniverseMembership
@@ -121,10 +122,17 @@ async def lifespan(app: FastAPI):
         )
     )
     app.state.evaluation_task = asyncio.create_task(run_evaluation_service(session_factory=session_factory))
+    app.state.alert_delivery_task = asyncio.create_task(
+        run_alert_delivery_service(
+            session_factory=session_factory,
+            notifier=notifier,
+            settings_provider=lambda: app.state.settings,
+        )
+    )
 
     yield
 
-    for task_name in ("evaluation_task", "candle_ingestion_task", "startup_universe_task"):
+    for task_name in ("alert_delivery_task", "evaluation_task", "candle_ingestion_task", "startup_universe_task"):
         task = getattr(app.state, task_name, None)
         if task is not None and not task.done():
             task.cancel()
@@ -162,7 +170,7 @@ async def health(request: Request):
     latest_signals_ts = latest_signals.get("ts") if isinstance(latest_signals, dict) else None
 
     tasks: dict[str, dict[str, object]] = {}
-    for name in ("startup_universe_task", "candle_ingestion_task", "evaluation_task"):
+    for name in ("startup_universe_task", "candle_ingestion_task", "evaluation_task", "alert_delivery_task"):
         task = getattr(request.app.state, name, None)
         if task is None:
             continue
@@ -358,6 +366,9 @@ async def list_alerts(limit: int = 100, session=Depends(db_session_dep)):
                 "message": a.message,
                 "delivered": bool(a.delivered),
                 "delivery_channel": a.delivery_channel,
+                "delivery_attempts": int(a.delivery_attempts or 0),
+                "last_delivery_attempt_ts": int(a.last_delivery_attempt_ts) if a.last_delivery_attempt_ts else None,
+                "delivery_error": a.delivery_error,
             }
             for a in rows
         ]
@@ -379,6 +390,9 @@ async def get_alert(alert_id: str, session=Depends(db_session_dep)):
         "message": alert.message,
         "delivered": bool(alert.delivered),
         "delivery_channel": alert.delivery_channel,
+        "delivery_attempts": int(alert.delivery_attempts or 0),
+        "last_delivery_attempt_ts": int(alert.last_delivery_attempt_ts) if alert.last_delivery_attempt_ts else None,
+        "delivery_error": alert.delivery_error,
     }
 
 
