@@ -14,6 +14,7 @@ FIVE_MIN_MS = 5 * MINUTE_MS
 class FeatureSet:
     t0: int
     price: float
+    high: float
     r1: float
     r5: float
     r15: float
@@ -73,25 +74,35 @@ def _last_common_t(symbol: list[Candle], baseline: dict[int, Candle]) -> Optiona
     return None
 
 
-def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle]) -> Optional[FeatureSet]:
+def compute_features_with_reason(
+    symbol_candles: list[Candle],
+    baseline_candles: list[Candle],
+    *,
+    t0: Optional[int] = None,
+) -> tuple[Optional[FeatureSet], Optional[str]]:
     if not symbol_candles or not baseline_candles:
-        return None
+        return None, "missing_series"
 
     baseline_by_t = {c.t: c for c in baseline_candles}
     symbol_by_t = {c.t: c for c in symbol_candles}
 
-    t0 = _last_common_t(symbol_candles, baseline_by_t)
     if t0 is None:
-        return None
+        t0 = _last_common_t(symbol_candles, baseline_by_t)
+        if t0 is None:
+            return None, "no_common_t0"
+    else:
+        if t0 not in symbol_by_t or t0 not in baseline_by_t:
+            return None, "missing_t0"
 
     # Required 1m offsets for returns/acceleration.
     required_offsets = [0, 1, 5, 10, 15]
     for k in required_offsets:
         t = t0 - (k * MINUTE_MS)
         if t not in symbol_by_t or t not in baseline_by_t:
-            return None
+            return None, "missing_offsets"
 
     c0 = _to_f(symbol_by_t[t0].c)
+    h0 = _to_f(symbol_by_t[t0].h)
     c1 = _to_f(symbol_by_t[t0 - MINUTE_MS].c)
     c5 = _to_f(symbol_by_t[t0 - 5 * MINUTE_MS].c)
     c10 = _to_f(symbol_by_t[t0 - 10 * MINUTE_MS].c)
@@ -106,12 +117,12 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
     r5 = _ret(c0, c5)
     r15 = _ret(c0, c15)
     if r1 is None or r5 is None or r15 is None:
-        return None
+        return None, "bad_returns"
 
     br5 = _ret(b0, b5)
     br15 = _ret(b0, b15)
     if br5 is None or br15 is None:
-        return None
+        return None, "bad_baseline_returns"
 
     rel_r5 = r5 - br5
     rel_r15 = r15 - br15
@@ -119,7 +130,7 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
     r5_prev = _ret(c5, c10)
     br5_prev = _ret(b5, b10)
     if r5_prev is None or br5_prev is None:
-        return None
+        return None, "bad_accel"
 
     rel_r5_prev = r5_prev - br5_prev
     accel = rel_r5 - rel_r5_prev
@@ -132,7 +143,7 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
         t = t0 - ((59 - i) * MINUTE_MS)
         c = symbol_by_t.get(t)
         if c is None:
-            return None
+            return None, "missing_dv_window"
         close = _to_f(c.c)
         vol = _to_f(c.v)
         dv.append(close * vol)
@@ -149,10 +160,10 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
     avg_dv_1m = dv_mean
 
     if vwap_den <= 0.0:
-        return None
+        return None, "zero_volume_window"
     vwap60 = vwap_num / vwap_den
     if vwap60 <= 0.0:
-        return None
+        return None, "bad_vwap"
     extension = (c0 - vwap60) / vwap60
 
     # Breakout: C0 > max(high over prior 20 closed 1m candles)
@@ -161,7 +172,7 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
         t = t0 - (i * MINUTE_MS)
         c = symbol_by_t.get(t)
         if c is None:
-            return None
+            return None, "missing_breakout_window"
         prior_highs.append(_to_f(c.h))
     breakout = 1 if c0 > max(prior_highs) else 0
 
@@ -171,21 +182,30 @@ def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle
     ema9 = _ema_last(closes_5m, 9)
     ema21 = _ema_last(closes_5m, 21)
     if ema9 is None or ema21 is None:
-        return None
+        return None, "insufficient_5m_history"
     trend_ok = ema9 > ema21
 
-    return FeatureSet(
-        t0=t0,
-        price=c0,
-        r1=r1,
-        r5=r5,
-        r15=r15,
-        rel_r5=rel_r5,
-        rel_r15=rel_r15,
-        accel=accel,
-        dv_z=dv_z,
-        avg_dv_1m=avg_dv_1m,
-        breakout=breakout,
-        trend_ok=trend_ok,
-        extension=extension,
+    return (
+        FeatureSet(
+            t0=t0,
+            price=c0,
+            high=h0,
+            r1=r1,
+            r5=r5,
+            r15=r15,
+            rel_r5=rel_r5,
+            rel_r15=rel_r15,
+            accel=accel,
+            dv_z=dv_z,
+            avg_dv_1m=avg_dv_1m,
+            breakout=breakout,
+            trend_ok=trend_ok,
+            extension=extension,
+        ),
+        None,
     )
+
+
+def compute_features(symbol_candles: list[Candle], baseline_candles: list[Candle]) -> Optional[FeatureSet]:
+    fs, _reason = compute_features_with_reason(symbol_candles, baseline_candles)
+    return fs

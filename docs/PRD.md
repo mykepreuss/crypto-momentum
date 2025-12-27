@@ -53,6 +53,8 @@ Default (recommended):
 - Max exit alerts: 5 per rolling 24 hours
 - Exit alerts are only eligible for instruments with an entry alert in the last 24h
 
+Budgets apply to alert events created by the signal engine; notification delivery is best-effort with brief retries and does not change eligibility.
+
 This produces a tight loop: at most ~5 “opportunities” per day, each with a corresponding “slowdown” signal.
 
 ## 8) Success Metrics (v1)

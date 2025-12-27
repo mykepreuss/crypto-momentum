@@ -199,6 +199,11 @@ async def run_state_machine_and_alert(
                         if st.peak_price_since_entry is None or float(price) > float(st.peak_price_since_entry):
                             st.peak_price_since_entry = float(price)
                             st.peak_ts_since_entry = int(t0)
+                        high = features.get("high")
+                        if isinstance(high, (int, float)):
+                            if st.peak_high_since_entry is None or float(high) > float(st.peak_high_since_entry):
+                                st.peak_high_since_entry = float(high)
+                                st.peak_high_ts_since_entry = int(t0)
 
                         exit_reason = determine_exit_reason(
                             score=score,
@@ -254,6 +259,8 @@ async def run_state_machine_and_alert(
             st.last_state_change_ts = now
             st.peak_price_since_entry = None
             st.peak_ts_since_entry = None
+            st.peak_high_since_entry = None
+            st.peak_high_ts_since_entry = None
 
         # 2) Entries (budgeted + throttled).
         entries_fired = 0
@@ -319,10 +326,15 @@ async def run_state_machine_and_alert(
                 st.last_entry_alert_ts = now
                 price = features.get("price")
                 t0 = features.get("t0")
+                high = features.get("high")
                 if isinstance(price, (int, float)):
                     st.peak_price_since_entry = float(price)
                 if isinstance(t0, int):
                     st.peak_ts_since_entry = int(t0)
+                if isinstance(high, (int, float)):
+                    st.peak_high_since_entry = float(high)
+                if isinstance(t0, int) and isinstance(high, (int, float)):
+                    st.peak_high_ts_since_entry = int(t0)
 
                 entries_fired += 1
                 entry_count += 1
@@ -333,22 +345,6 @@ async def run_state_machine_and_alert(
         # Persist state + alerts.
         if new_alerts:
             await session.commit()
-
-            delivered_ids: list[str] = []
-            if settings.slack_webhook_url is not None:
-                for a in new_alerts:
-                    try:
-                        await notifier.send_text(a.message)
-                        delivered_ids.append(a.id)
-                    except Exception:
-                        logger.exception("alert delivery failed", extra={"alert_id": a.id, "symbol": a.symbol})
-
-            if delivered_ids:
-                await session.execute(
-                    sa.update(Alert).where(Alert.id.in_(delivered_ids)).values(delivered=True, delivery_channel="slack")
-                )
-                await session.commit()
-
         else:
             await session.commit()
 
