@@ -61,6 +61,35 @@ async def test_upsert_candle_rows_is_idempotent_and_updates() -> None:
         await engine.dispose()
 
 
+async def test_upsert_candle_rows_chunks_large_batches() -> None:
+    engine, session_factory = await _make_sessionmaker()
+    try:
+        rows = [
+            {
+                "symbol": "SOL_USDT",
+                "t": i * 60_000,
+                "o": Decimal("1"),
+                "h": Decimal("2"),
+                "l": Decimal("0.5"),
+                "c": Decimal("1.5"),
+                "v": Decimal("10"),
+            }
+            for i in range(1, 400)
+        ]
+
+        async with session_factory() as session:
+            await upsert_candle_rows(session, rows)
+            await session.commit()
+
+        async with session_factory() as session:
+            count = (
+                await session.execute(sa.select(sa.func.count()).select_from(Candle1m).where(Candle1m.symbol == "SOL_USDT"))
+            ).scalar_one()
+            assert int(count) == len(rows)
+    finally:
+        await engine.dispose()
+
+
 async def test_ingest_latest_candles_once_reads_universe_and_upserts() -> None:
     engine, session_factory = await _make_sessionmaker()
 
