@@ -61,7 +61,9 @@ class Settings(BaseSettings):
     admin_token: Optional[str] = None
 
     # Database
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/crypto_momentum"
+    # Prefer 127.0.0.1 over localhost to avoid IPv6 (::1) resolving to a different local Postgres.
+    # Local docker-compose maps container 5432 -> host 5433 by default.
+    database_url: str = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/crypto_momentum"
 
     @field_validator("slack_webhook_url", "slack_channel_name", "admin_token", mode="before")
     @classmethod

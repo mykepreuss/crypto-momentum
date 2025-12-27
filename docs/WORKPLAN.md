@@ -1,6 +1,6 @@
 # Crypto Momentum Scout — V1 Workplan
 
-Last updated: 2025-12-26
+Last updated: 2025-12-27
 
 ## PRD/SPEC lock-ins (V1)
 
@@ -28,7 +28,12 @@ Last updated: 2025-12-26
 
 ## “Done but should verify” checklist (local ops)
 
-1. [ ] Run `python -m pytest -q` in a Python 3.11 virtualenv.
-2. [ ] `docker compose up -d db` then `alembic upgrade head` then run `uvicorn app.main:app --reload`.
-3. [ ] Confirm end-to-end flow: `/universe` populates → candles backfill → `/signals/latest` returns ranked list → alerts appear in `/alerts` → evaluations appear in `/eval` after ~60m.
+1. [x] Run `python -m pytest -q` in a Python 3.11+ virtualenv.
+2. [x] `docker compose up -d db` then `alembic upgrade head` then run `uvicorn app.main:app --reload`.
+3. [ ] Confirm end-to-end flow:
+   - [x] `/universe` populates
+   - [x] candles backfill completes
+   - [x] `/signals/latest` returns ranked list
+   - [x] alerts appear in `/alerts`
+   - [ ] evaluations appear in `/eval` after enough future candles exist (up to ~60m after entry)
 4. [x] Compile-check: `PYTHONPYCACHEPREFIX="$PWD/.pycache" python -m compileall -q app`.

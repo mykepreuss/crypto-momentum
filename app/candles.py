@@ -14,6 +14,16 @@ from app.models import Candle1m
 
 logger = logging.getLogger(__name__)
 
+# Driver limits: asyncpg (Postgres) and sqlite have a maximum number of bind parameters per query.
+# If we exceed these, inserts/upserts fail with InterfaceError. Chunk conservatively to stay under.
+_MAX_BIND_PARAMS: dict[str, int] = {
+    # asyncpg: "the number of query arguments cannot exceed 32767"
+    "postgresql": 32767,
+    # SQLite default is commonly 999, though some builds raise it; we keep a safe value.
+    "sqlite": 999,
+}
+_BIND_PARAMS_OVERHEAD = 32
+
 
 def _insert_for_dialect(dialect_name: str):
     if dialect_name == "postgresql":
@@ -170,6 +180,16 @@ def candle_rows(symbol: str, candles: list[Candle]) -> list[dict[str, object]]:
     ]
 
 
+def _max_rows_per_statement(dialect_name: str, params_per_row: int) -> Optional[int]:
+    if params_per_row <= 0:
+        return None
+    limit = _MAX_BIND_PARAMS.get(dialect_name)
+    if limit is None:
+        return None
+    usable = max(1, int(limit) - _BIND_PARAMS_OVERHEAD)
+    return max(1, usable // params_per_row)
+
+
 async def upsert_candle_rows(session: AsyncSession, rows: list[dict[str, object]]) -> None:
     if not rows:
         return
@@ -177,19 +197,32 @@ async def upsert_candle_rows(session: AsyncSession, rows: list[dict[str, object]
     bind = session.get_bind()
     insert_fn = _insert_for_dialect(bind.dialect.name)
 
-    stmt = insert_fn(Candle1m.__table__).values(rows)
-    if hasattr(stmt, "on_conflict_do_update"):
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["symbol", "t"],
-            set_={
-                "o": stmt.excluded.o,
-                "h": stmt.excluded.h,
-                "l": stmt.excluded.l,
-                "c": stmt.excluded.c,
-                "v": stmt.excluded.v,
-            },
-        )
-    await session.execute(stmt)
+    params_per_row = len(rows[0]) if isinstance(rows[0], dict) else 0
+    max_rows = _max_rows_per_statement(bind.dialect.name, params_per_row=params_per_row)
+    if max_rows is None or len(rows) <= max_rows:
+        chunks = [rows]
+    else:
+        if params_per_row > 0:
+            logger.warning(
+                "upsert_candle_rows chunking to avoid bind param limit",
+                extra={"dialect": bind.dialect.name, "rows": len(rows), "max_rows": max_rows},
+            )
+        chunks = [rows[i : i + max_rows] for i in range(0, len(rows), max_rows)]
+
+    for chunk in chunks:
+        stmt = insert_fn(Candle1m.__table__).values(chunk)
+        if hasattr(stmt, "on_conflict_do_update"):
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "t"],
+                set_={
+                    "o": stmt.excluded.o,
+                    "h": stmt.excluded.h,
+                    "l": stmt.excluded.l,
+                    "c": stmt.excluded.c,
+                    "v": stmt.excluded.v,
+                },
+            )
+        await session.execute(stmt)
 
 
 async def prune_old_candles(session: AsyncSession, cutoff_ts_ms: int) -> int:
