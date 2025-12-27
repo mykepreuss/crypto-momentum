@@ -1,22 +1,28 @@
 services:
   db:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: crypto_momentum
     ports:
       # Map to a non-default host port to avoid conflicts with a locally installed Postgres.
-      - "5433:5432"
+      # Bind to localhost so Postgres isn't exposed on your LAN by default.
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   app:
     build: .
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/crypto_momentum
-      APP_ENV: dev
-      LOG_LEVEL: INFO
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      SLACK_CHANNEL_NAME: ${SLACK_CHANNEL_NAME:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     ports:
       - "8000:8000"
     depends_on:
