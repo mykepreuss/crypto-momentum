@@ -122,10 +122,22 @@ class CryptoComExchangeClient:
         instrument_name: str,
         timeframe: str = "1m",
         count: int = 2,
+        *,
+        start_ts: Optional[int] = None,
+        end_ts: Optional[int] = None,
     ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {
+            "instrument_name": instrument_name,
+            "timeframe": timeframe,
+            "count": count,
+        }
+        if start_ts is not None:
+            params["start_ts"] = int(start_ts)
+        if end_ts is not None:
+            params["end_ts"] = int(end_ts)
         result = await self._request(
             "public/get-candlestick",
-            params={"instrument_name": instrument_name, "timeframe": timeframe, "count": count},
+            params=params,
         )
         data = result.get("data")
         if not isinstance(data, list):

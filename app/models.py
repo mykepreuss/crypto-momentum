@@ -49,6 +49,43 @@ class Candle1m(Base):
     __table_args__ = (sa.Index("ix_candles_1m_t", "t"),)
 
 
+class Candle1mHist(Base):
+    __tablename__ = "candles_1m_hist"
+
+    # Historical candles used for offline evaluation/backtests. This table is NOT pruned by the
+    # live ingestion retention job.
+    symbol: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    t: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True)  # candle start (ms)
+    o: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    h: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    l: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    c: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    v: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+
+    __table_args__ = (sa.Index("ix_candles_1m_hist_t", "t"),)
+
+
+class CandleHistBar(Base):
+    __tablename__ = "candles_hist_bars"
+
+    # Historical aggregated bars derived from candles_1m_hist for offline replay/sweeps.
+    timeframe_min: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
+    symbol: Mapped[str] = mapped_column(sa.Text, primary_key=True)
+    # IMPORTANT: we store bars at BAR CLOSE time to avoid lookahead when replay logic treats `t`
+    # as the decision timestamp (analogous to using the last closed candle).
+    t: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True)  # bar close (ms)
+    o: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    h: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    l: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    c: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+    v: Mapped[sa.Numeric] = mapped_column(sa.Numeric, nullable=False)
+
+    __table_args__ = (
+        sa.Index("ix_candles_hist_bars_timeframe_t", "timeframe_min", "t"),
+        sa.Index("ix_candles_hist_bars_symbol_timeframe_t", "symbol", "timeframe_min", "t"),
+    )
+
+
 class Ticker24h(Base):
     __tablename__ = "ticker_24h"
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import HttpUrl, field_validator
+from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,11 +16,19 @@ class Settings(BaseSettings):
     cryptocom_exchange_base_url: HttpUrl = "https://api.crypto.com/exchange/v1"
     quote_ccy: str = "USDT"
     max_universe_size: int = 200
+    # Exclude stable/fiat base currencies from the universe by default. This prevents churn in
+    # pegged markets (e.g. EUR_USDT, USDC_USDT) that typically have poor momentum expectancy.
+    universe_exclude_base_ccy: str = "USD,EUR,USDT,USDC,DAI,PYUSD,USDP,TUSD,BUSD,GUSD,PAX,USDD,FDUSD,FRAX"
+    universe_exclude_symbols: str = ""
     max_concurrent_requests: int = 25
     http_timeout_s: float = 10.0
 
     # Alerting budgets (rolling window)
     alert_lookback_hours: int = 24
+    # Exit alerts are only eligible if the symbol had an entry alert within this lookback window.
+    # Defaults to the same value as `alert_lookback_hours` (V1 behavior), but can be widened for
+    # higher-timeframe research (e.g. 7d for 4h bars) without changing the budget window.
+    exit_entry_lookback_hours: int = Field(24, ge=1, le=168)
     max_entry_alerts_24h: int = 5
     max_exit_alerts_24h: int = 5
     max_total_alerts_24h: int = 10
@@ -43,9 +51,16 @@ class Settings(BaseSettings):
     book_check_top_n: int = 20
     signals_return_limit: int = 50
 
+    # Research gates (optional): tighten entries to reduce churn on fee-heavy venues.
+    require_btc_trend_ok_for_entries: bool = False
+    min_rank_rel_r15: float = Field(0.0, ge=0.0, le=1.0)
+
     # State machine thresholds + cooldowns
     entry_score_threshold: float = 0.80
     exit_score_threshold: float = 0.55
+    # Exit behavior: default is V1 ("score_trend_stall"). Research option: "trend_trailing".
+    exit_mode: str = "score_trend_stall"
+    trailing_stop_pct: float = Field(0.0, ge=0.0, le=1.0)
     stall_minutes: int = 10
     stall_dvz_max: float = 1.0
     global_entry_cooldown_min: int = 10
@@ -73,6 +88,24 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return None
         return v
+
+    @field_validator("universe_exclude_base_ccy", "universe_exclude_symbols", mode="before")
+    @classmethod
+    def _normalize_csv(cls, v):
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            return str(v)
+        return v.strip()
+
+    @field_validator("exit_mode")
+    @classmethod
+    def _validate_exit_mode(cls, v: str):
+        vv = str(v).strip()
+        allowed = {"score_trend_stall", "trend_trailing"}
+        if vv not in allowed:
+            raise ValueError(f"exit_mode must be one of: {sorted(allowed)}")
+        return vv
 
 
 def get_settings() -> Settings:

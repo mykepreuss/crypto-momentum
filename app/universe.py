@@ -142,13 +142,26 @@ def _is_spot_like_symbol(symbol: str) -> bool:
     return True
 
 
+def _parse_csv_set(s: Optional[str]) -> set[str]:
+    if s is None:
+        return set()
+    parts = [p.strip().upper() for p in str(s).split(",")]
+    return {p for p in parts if p}
+
+
 def select_universe(
     instruments: list[ParsedInstrument],
     tickers: dict[str, ParsedTicker],
     quote_ccy: str,
     max_size: int,
     updated_ts: int,
+    *,
+    exclude_base_ccy: Optional[set[str]] = None,
+    exclude_symbols: Optional[set[str]] = None,
 ) -> UniverseSelection:
+    exclude_base_ccy = exclude_base_ccy or set()
+    exclude_symbols = exclude_symbols or set()
+
     candidates: list[tuple[str, Decimal, str]] = []
     for inst in instruments:
         if not inst.tradable:
@@ -157,10 +170,14 @@ def select_universe(
             continue
         if not _is_spot_like_symbol(inst.symbol):
             continue
+        if inst.symbol.upper() in exclude_symbols:
+            continue
         t = tickers.get(inst.symbol)
         if t is None:
             continue
         base = inst.base_ccy or inst.symbol.split("_", 1)[0]
+        if base.strip().upper() in exclude_base_ccy:
+            continue
         candidates.append((inst.symbol, t.dollar_vol_24h, base))
 
     if not candidates:
@@ -332,6 +349,8 @@ async def refresh_universe(
         quote_ccy=settings.quote_ccy,
         max_size=settings.max_universe_size,
         updated_ts=updated_ts,
+        exclude_base_ccy=_parse_csv_set(settings.universe_exclude_base_ccy),
+        exclude_symbols=_parse_csv_set(settings.universe_exclude_symbols),
     )
 
     await persist_market_data(

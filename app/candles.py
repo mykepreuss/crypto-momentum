@@ -190,12 +190,22 @@ def _max_rows_per_statement(dialect_name: str, params_per_row: int) -> Optional[
     return max(1, usable // params_per_row)
 
 
-async def upsert_candle_rows(session: AsyncSession, rows: list[dict[str, object]]) -> None:
+async def upsert_candle_rows_table(
+    session: AsyncSession,
+    table: sa.Table,
+    rows: list[dict[str, object]],
+    *,
+    index_elements: Optional[list[str]] = None,
+) -> None:
     if not rows:
         return
 
     bind = session.get_bind()
     insert_fn = _insert_for_dialect(bind.dialect.name)
+
+    if index_elements is None:
+        pk_cols = [c.name for c in table.primary_key.columns] if table.primary_key is not None else []
+        index_elements = pk_cols or ["symbol", "t"]
 
     params_per_row = len(rows[0]) if isinstance(rows[0], dict) else 0
     max_rows = _max_rows_per_statement(bind.dialect.name, params_per_row=params_per_row)
@@ -210,19 +220,20 @@ async def upsert_candle_rows(session: AsyncSession, rows: list[dict[str, object]
         chunks = [rows[i : i + max_rows] for i in range(0, len(rows), max_rows)]
 
     for chunk in chunks:
-        stmt = insert_fn(Candle1m.__table__).values(chunk)
+        stmt = insert_fn(table).values(chunk)
         if hasattr(stmt, "on_conflict_do_update"):
+            update_cols = [k for k in rows[0].keys() if k not in set(index_elements)]
             stmt = stmt.on_conflict_do_update(
-                index_elements=["symbol", "t"],
+                index_elements=list(index_elements),
                 set_={
-                    "o": stmt.excluded.o,
-                    "h": stmt.excluded.h,
-                    "l": stmt.excluded.l,
-                    "c": stmt.excluded.c,
-                    "v": stmt.excluded.v,
+                    k: getattr(stmt.excluded, k) for k in update_cols
                 },
             )
         await session.execute(stmt)
+
+
+async def upsert_candle_rows(session: AsyncSession, rows: list[dict[str, object]]) -> None:
+    await upsert_candle_rows_table(session, Candle1m.__table__, rows)
 
 
 async def prune_old_candles(session: AsyncSession, cutoff_ts_ms: int) -> int:

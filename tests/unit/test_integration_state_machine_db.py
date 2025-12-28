@@ -31,6 +31,7 @@ def _signal(
     score: float,
     t0: int,
     price: float,
+    rank_rel_r15: float = 1.0,
     dv_z: float = 2.0,
     trend_ok: bool = True,
     passes_hard_gates: bool = True,
@@ -40,6 +41,7 @@ def _signal(
     return {
         "symbol": symbol,
         "score": score,
+        "rank_rel_r15": rank_rel_r15,
         "passes_hard_gates": passes_hard_gates,
         "passes_spread_gate": passes_spread_gate,
         "spread": spread,
@@ -132,6 +134,124 @@ async def test_state_machine_entry_budget_blocks_second_entry_same_scan() -> Non
         await engine.dispose()
 
 
+async def test_state_machine_btc_regime_gate_blocks_entries_only() -> None:
+    engine, session_factory = await _make_sessionmaker()
+    try:
+        async with session_factory() as session:
+            session.add(
+                UniverseMembership(
+                    symbol="AAA_USDT",
+                    quote_ccy="USDT",
+                    is_active=True,
+                    is_baseline=False,
+                    liquidity_rank=1,
+                    dollar_vol_24h=Decimal("100000"),
+                    updated_ts=now_ms(),
+                )
+            )
+            await session.commit()
+
+        t0 = 1_700_000_000_000
+        settings = Settings(
+            quote_ccy="USDT",
+            entry_score_threshold=0.80,
+            require_btc_trend_ok_for_entries=True,
+            global_entry_cooldown_min=0,
+            max_entry_alerts_per_scan=10,
+            max_entry_alerts_24h=50,
+            max_total_alerts_24h=50,
+            database_url="sqlite+aiosqlite:///:memory:",
+        )
+
+        res1 = await run_state_machine_and_alert(
+            session_factory=session_factory,
+            exchange=NoBookExchange(),  # type: ignore[arg-type]
+            notifier=NullNotifier(),
+            settings=settings,
+            signals_snapshot={
+                "baseline_symbol": "BTC_USDT",
+                "baseline_trend_ok": False,
+                "signals": [_signal(symbol="AAA_USDT", score=0.90, t0=t0, price=10.0)],
+            },
+        )
+        assert res1["ok"] is True
+        assert res1["new_alerts"] == 0
+
+        res2 = await run_state_machine_and_alert(
+            session_factory=session_factory,
+            exchange=NoBookExchange(),  # type: ignore[arg-type]
+            notifier=NullNotifier(),
+            settings=settings,
+            signals_snapshot={
+                "baseline_symbol": "BTC_USDT",
+                "baseline_trend_ok": True,
+                "signals": [_signal(symbol="AAA_USDT", score=0.90, t0=t0 + 60_000, price=10.1)],
+            },
+        )
+        assert res2["ok"] is True
+        assert res2["new_alerts"] == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_state_machine_min_rank_rel_r15_gate_blocks_entries() -> None:
+    engine, session_factory = await _make_sessionmaker()
+    try:
+        async with session_factory() as session:
+            session.add(
+                UniverseMembership(
+                    symbol="AAA_USDT",
+                    quote_ccy="USDT",
+                    is_active=True,
+                    is_baseline=False,
+                    liquidity_rank=1,
+                    dollar_vol_24h=Decimal("100000"),
+                    updated_ts=now_ms(),
+                )
+            )
+            await session.commit()
+
+        t0 = 1_700_000_000_000
+        settings = Settings(
+            quote_ccy="USDT",
+            entry_score_threshold=0.80,
+            min_rank_rel_r15=0.90,
+            global_entry_cooldown_min=0,
+            max_entry_alerts_per_scan=10,
+            max_entry_alerts_24h=50,
+            max_total_alerts_24h=50,
+            database_url="sqlite+aiosqlite:///:memory:",
+        )
+
+        res1 = await run_state_machine_and_alert(
+            session_factory=session_factory,
+            exchange=NoBookExchange(),  # type: ignore[arg-type]
+            notifier=NullNotifier(),
+            settings=settings,
+            signals_snapshot={
+                "baseline_symbol": "BTC_USDT",
+                "signals": [_signal(symbol="AAA_USDT", score=0.90, rank_rel_r15=0.50, t0=t0, price=10.0)],
+            },
+        )
+        assert res1["ok"] is True
+        assert res1["new_alerts"] == 0
+
+        res2 = await run_state_machine_and_alert(
+            session_factory=session_factory,
+            exchange=NoBookExchange(),  # type: ignore[arg-type]
+            notifier=NullNotifier(),
+            settings=settings,
+            signals_snapshot={
+                "baseline_symbol": "BTC_USDT",
+                "signals": [_signal(symbol="AAA_USDT", score=0.90, rank_rel_r15=0.95, t0=t0 + 60_000, price=10.1)],
+            },
+        )
+        assert res2["ok"] is True
+        assert res2["new_alerts"] == 1
+    finally:
+        await engine.dispose()
+
+
 async def test_state_machine_exit_requires_recent_entry_alert() -> None:
     engine, session_factory = await _make_sessionmaker()
     try:
@@ -197,6 +317,74 @@ async def test_state_machine_exit_requires_recent_entry_alert() -> None:
 
             st = (await session.execute(sa.select(SignalState).where(SignalState.symbol == "AAA_USDT"))).scalars().one()
             assert st.state == "OUT"
+    finally:
+        await engine.dispose()
+
+
+async def test_state_machine_exit_entry_lookback_hours_decouples_from_budget_window() -> None:
+    engine, session_factory = await _make_sessionmaker()
+    try:
+        now = now_ms()
+        async with session_factory() as session:
+            session.add(
+                UniverseMembership(
+                    symbol="AAA_USDT",
+                    quote_ccy="USDT",
+                    is_active=True,
+                    is_baseline=False,
+                    liquidity_rank=1,
+                    dollar_vol_24h=Decimal("100000"),
+                    updated_ts=now,
+                )
+            )
+            # Entry was 25h ago: outside 24h budget window, but inside 7d exit eligibility window.
+            entry_ts = now - (25 * 3600 * 1000)
+            session.add(
+                SignalState(
+                    symbol="AAA_USDT",
+                    state="IN",
+                    last_state_change_ts=entry_ts,
+                    last_entry_alert_ts=entry_ts,
+                    last_exit_alert_ts=None,
+                    peak_price_since_entry=Decimal("10"),
+                    peak_ts_since_entry=1_700_000_000_000,
+                )
+            )
+            await session.commit()
+
+        t0 = 1_700_000_000_000
+        settings = Settings(
+            quote_ccy="USDT",
+            # Budgets remain 24h.
+            alert_lookback_hours=24,
+            # Exit eligibility widened for higher-timeframe holds.
+            exit_entry_lookback_hours=168,
+            exit_score_threshold=0.55,
+            symbol_exit_cooldown_min=0,
+            max_exit_alerts_24h=50,
+            max_total_alerts_24h=200,
+            database_url="sqlite+aiosqlite:///:memory:",
+        )
+
+        res = await run_state_machine_and_alert(
+            session_factory=session_factory,
+            exchange=NoBookExchange(),  # type: ignore[arg-type]
+            notifier=NullNotifier(),
+            settings=settings,
+            signals_snapshot={
+                "baseline_symbol": "BTC_USDT",
+                "signals": [_signal(symbol="AAA_USDT", score=0.50, t0=t0, price=9.0)],
+            },
+        )
+        assert res["ok"] is True
+        assert res["new_alerts"] == 1
+
+        async with session_factory() as session:
+            exits = (
+                await session.execute(sa.select(Alert).where(Alert.alert_type == ALERT_TYPE_MOMENTUM_SLOWING))
+            ).scalars().all()
+            assert len(exits) == 1
+            assert exits[0].symbol == "AAA_USDT"
     finally:
         await engine.dispose()
 

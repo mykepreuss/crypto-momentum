@@ -118,6 +118,7 @@ async def compute_latest_signals(
             "error": f"Baseline candles not usable yet: {baseline_reason}",
             "signals": [],
         }
+    baseline_trend_ok = bool(_baseline_fs.trend_ok) if _baseline_fs is not None else False
 
     candidate_symbols = [s for s in symbols if s != baseline_symbol]
 
@@ -209,6 +210,15 @@ async def compute_latest_signals(
     # Add a tuning-friendly failure summary per row (why it can't currently alert).
     for r in rows:
         failures: list[str] = []
+        if settings.require_btc_trend_ok_for_entries and not baseline_trend_ok:
+            failures.append("btc_regime_off")
+        if settings.min_rank_rel_r15 > 0.0:
+            try:
+                rank_rel_r15 = float(r.get("rank_rel_r15", 0.0))
+            except (TypeError, ValueError):
+                rank_rel_r15 = 0.0
+            if rank_rel_r15 < float(settings.min_rank_rel_r15):
+                failures.append("rank_rel_r15_below_min")
         if r.get("meets_entry_threshold") is False:
             failures.append("score_below_entry_threshold")
         hard = r.get("hard_gates") or {}
@@ -233,6 +243,7 @@ async def compute_latest_signals(
         "t0": t0,
         "quote_ccy": settings.quote_ccy,
         "baseline_symbol": baseline_symbol,
+        "baseline_trend_ok": baseline_trend_ok,
         "computed_symbols": len(features),
         "excluded_symbols": excluded,
         "excluded_symbols_count": len(excluded),

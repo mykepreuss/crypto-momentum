@@ -50,9 +50,29 @@ def determine_exit_reason(
     trend_ok: bool,
     dv_z: float,
     t0: int,
+    price: float,
+    peak_price: Optional[float],
+    peak_high: Optional[float],
     peak_ts: Optional[int],
     settings: Settings,
 ) -> Optional[str]:
+    if settings.exit_mode == "trend_trailing":
+        if trend_ok is False:
+            return "trend_break"
+        trailing = float(settings.trailing_stop_pct)
+        if trailing > 0.0:
+            peak_ref = None
+            if peak_high is not None and float(peak_high) > 0.0:
+                peak_ref = float(peak_high)
+            elif peak_price is not None and float(peak_price) > 0.0:
+                peak_ref = float(peak_price)
+            if peak_ref is not None and peak_ref > 0.0:
+                drawdown = (float(peak_ref) - float(price)) / float(peak_ref)
+                if drawdown >= trailing:
+                    return "trailing_stop"
+        return None
+
+    # Default V1 behavior ("score_trend_stall")
     if score <= settings.exit_score_threshold:
         return "score_below_exit_threshold"
     if trend_ok is False:
@@ -116,10 +136,12 @@ async def run_state_machine_and_alert(
     signals_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     now = now_ms()
-    lookback_ms = int(settings.alert_lookback_hours * 3600 * 1000)
-    window_start = now - lookback_ms
+    budget_window_ms = int(settings.alert_lookback_hours * 3600 * 1000)
+    exit_entry_lookback_ms = int(settings.exit_entry_lookback_hours * 3600 * 1000)
+    window_start = now - budget_window_ms
 
     baseline_symbol = signals_snapshot.get("baseline_symbol")
+    baseline_trend_ok = signals_snapshot.get("baseline_trend_ok")
     snapshot_error = signals_snapshot.get("error")
     signals = signals_snapshot.get("signals") or []
     if not isinstance(signals, list):
@@ -210,6 +232,17 @@ async def run_state_machine_and_alert(
                             trend_ok=trend_ok,
                             dv_z=float(dv_z),
                             t0=int(t0),
+                            price=float(price),
+                            peak_price=(
+                                float(st.peak_price_since_entry)
+                                if st.peak_price_since_entry is not None
+                                else None
+                            ),
+                            peak_high=(
+                                float(st.peak_high_since_entry)
+                                if st.peak_high_since_entry is not None
+                                else None
+                            ),
                             peak_ts=st.peak_ts_since_entry,
                             settings=settings,
                         )
@@ -219,7 +252,7 @@ async def run_state_machine_and_alert(
 
             should_alert = True
             # Exit alerts only if we had an entry alert for this symbol in the last 24h.
-            if st.last_entry_alert_ts is None or (now - int(st.last_entry_alert_ts)) > lookback_ms:
+            if st.last_entry_alert_ts is None or (now - int(st.last_entry_alert_ts)) > exit_entry_lookback_ms:
                 should_alert = False
             if st.last_exit_alert_ts is not None and (now - int(st.last_exit_alert_ts)) < _ms(
                 settings.symbol_exit_cooldown_min
@@ -264,7 +297,16 @@ async def run_state_machine_and_alert(
 
         # 2) Entries (budgeted + throttled).
         entries_fired = 0
-        if global_entry_ok and entry_count < settings.max_entry_alerts_24h and total_count < settings.max_total_alerts_24h:
+        btc_regime_ok = True
+        if settings.require_btc_trend_ok_for_entries:
+            btc_regime_ok = bool(baseline_trend_ok) is True
+
+        if (
+            global_entry_ok
+            and btc_regime_ok
+            and entry_count < settings.max_entry_alerts_24h
+            and total_count < settings.max_total_alerts_24h
+        ):
             # `signals` is already score-sorted; walk until we drop below threshold.
             for r in signals:
                 if entry_count >= settings.max_entry_alerts_24h or total_count >= settings.max_total_alerts_24h:
@@ -294,6 +336,14 @@ async def run_state_machine_and_alert(
 
                 if not bool(r.get("passes_hard_gates")):
                     continue
+
+                if settings.min_rank_rel_r15 > 0.0:
+                    try:
+                        rank_rel_r15 = float(r.get("rank_rel_r15", 0.0))
+                    except (TypeError, ValueError):
+                        rank_rel_r15 = 0.0
+                    if rank_rel_r15 < float(settings.min_rank_rel_r15):
+                        continue
 
                 # Spread gate is only computed for top candidates (see signals.py). Avoid doing
                 # on-demand book checks here to prevent bursts of API calls.
