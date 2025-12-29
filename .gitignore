@@ -13,5 +13,6 @@ lookback_trades.csv
 lookback_trades*.csv
 replay_alerts.csv
 replay_alerts*.csv
+replay_*.csv
 sweep_results.csv
 sweep_results*.csv
